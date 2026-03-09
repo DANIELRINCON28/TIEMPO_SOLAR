@@ -351,11 +351,26 @@ with tab_main:
                         result["poly_coefficients"], result["x_smooth"]
                     )
 
+                # Convertir todos los numpy arrays a listas Python para
+                # compatibilidad con Plotly 6.x y serialización de session_state
+                def _tolist(v):
+                    import numpy as np
+                    return v.tolist() if isinstance(v, np.ndarray) else v
+
+                result_clean = {
+                    k: _tolist(v) for k, v in result.items()
+                    if k not in ("model", "_scaler_x", "_scaler_y")
+                }
+
+                deriv_clean = None
+                if deriv_result is not None:
+                    deriv_clean = {k: _tolist(v) for k, v in deriv_result.items()}
+
                 st.session_state.results = {
-                    "result": result,
-                    "deriv": deriv_result,
-                    "X": X,
-                    "Y": Y,
+                    "result": result_clean,
+                    "deriv": deriv_clean,
+                    "X": X.tolist(),
+                    "Y": Y.tolist(),
                     "model_name": model_name,
                     "mode": mode,
                     "hyperparams": hyperparams,
@@ -468,22 +483,28 @@ with tab_main:
 
             fig_main = go.Figure()
 
+            # Garantizar listas Python puras para Plotly 6.x
+            px = list(X) if not isinstance(X, list) else X
+            py = list(Y) if not isinstance(Y, list) else Y
+            xs = result["x_smooth"] if isinstance(result["x_smooth"], list) else list(result["x_smooth"])
+            ys = result["y_smooth"] if isinstance(result["y_smooth"], list) else list(result["y_smooth"])
+
             # Puntos reales
             fig_main.add_trace(go.Scatter(
-                x=X, y=Y,
+                x=px, y=py,
                 mode="markers",
                 name="Mediciones",
                 marker=dict(
-                    size=10,
+                    size=11,
                     color="#f59e0b",
-                    line=dict(width=1.5, color="white"),
+                    line=dict(width=2, color="white"),
+                    symbol="circle",
                 ),
             ))
 
             # Curva del modelo
             fig_main.add_trace(go.Scatter(
-                x=result["x_smooth"],
-                y=result["y_smooth"],
+                x=xs, y=ys,
                 mode="lines",
                 name="Modelo",
                 line=dict(color="#4f46e5", width=3),
@@ -530,9 +551,12 @@ with tab_main:
             fig_deriv = None
             if deriv is not None:
                 fig_deriv = go.Figure()
+                # Convertir a listas puras para Plotly 6.x
+                dxs = result["x_smooth"] if isinstance(result["x_smooth"], list) else list(result["x_smooth"])
+                dyd = deriv["y_derivative"] if isinstance(deriv["y_derivative"], list) else list(deriv["y_derivative"])
                 fig_deriv.add_trace(go.Scatter(
-                    x=result["x_smooth"],
-                    y=deriv["y_derivative"],
+                    x=dxs,
+                    y=dyd,
                     mode="lines",
                     name="Velocidad v(x)",
                     line=dict(color="#4f46e5", width=3),

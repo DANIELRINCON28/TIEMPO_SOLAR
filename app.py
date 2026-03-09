@@ -224,6 +224,33 @@ if "results" not in st.session_state:
 if "evidence_files" not in st.session_state:
     st.session_state.evidence_files = []
 
+# ─── Helpers de tiempo HH.MM ─────────────────────────────────────────────────
+def _hhmm_to_dec(v):
+    """HH.MM (ej: 10.05 = 10h 05min) → horas decimales (10.0833)."""
+    h = int(v)
+    m = round((v - h) * 100)
+    return h + m / 60.0
+
+def _dec_to_label(dec_h):
+    """Horas decimales → etiqueta 'HH:MM' (ej: 10.0833 → '10:05')."""
+    h = int(dec_h)
+    m = round((dec_h - h) * 60)
+    if m == 60:
+        h += 1; m = 0
+    return f"{h}:{m:02d}"
+
+def _dec_to_dt(dec_h):
+    """Horas decimales → string ISO datetime (fecha ficticia 2000-01-01).
+    Plotly usa esto para espaciar el eje X por tiempo real."""
+    from datetime import datetime
+    h = int(dec_h)
+    m_frac = (dec_h - h) * 60
+    m = int(m_frac)
+    s = round((m_frac - m) * 60)
+    if s == 60: m += 1; s = 0
+    if m == 60: h += 1; m = 0
+    return datetime(2000, 1, 1, min(h, 23), m, s).isoformat()
+
 # ─── Pestañas principales ────────────────────────────────────────────────────
 tab_main, tab_history = st.tabs(["📊 Análisis", "📂 Historial"])
 
@@ -304,6 +331,9 @@ with tab_main:
         if _txt_key not in st.session_state:
             st.session_state[_txt_key] = _default_text
 
+        _hhmm_key = f"hhmm_{mode}"
+        _use_hhmm = st.session_state.get(_hhmm_key, False)
+
         st.markdown(
             '<p style="font-size:12px;color:#64748b;margin-bottom:4px;">'
             'Pega o escribe los datos: <code>hora,valor</code> — una fila por línea</p>',
@@ -319,8 +349,16 @@ with tab_main:
         )
         st.session_state[_txt_key] = raw_text
 
+        _use_hhmm = st.checkbox(
+            "⏱ Formato HH.MM — el decimal son minutos (ej: 10.05 = 10h 05min)",
+            value=_use_hhmm,
+            key=f"cb_hhmm_{mode}",
+            help="Actívalo si tu hora usa punto como separador de minutos (0–59), no como fracción decimal.",
+        )
+        st.session_state[_hhmm_key] = _use_hhmm
+
         # -- Parsear el texto a DataFrame --
-        def _parse_raw(text, col_y):
+        def _parse_raw(text, col_y, hhmm=False):
             rows = []
             errors = []
             for i, line in enumerate(text.strip().splitlines(), 1):
@@ -334,15 +372,18 @@ with tab_main:
                     errors.append(f"Línea {i}: «{line}» — necesita dos valores")
                     continue
                 try:
-                    x_val = float(parts[0].strip())
+                    x_raw = float(parts[0].strip())
                     y_val = float(parts[1].strip())
-                    rows.append({"Hora (X)": x_val, col_y: y_val})
+                    x_dec = _hhmm_to_dec(x_raw) if hhmm else x_raw
+                    x_lbl = _dec_to_label(x_dec) if hhmm else f"{x_raw:.2f}h"
+                    rows.append({"Hora (X)": x_dec, "_lbl": x_lbl, col_y: y_val})
                 except ValueError:
                     errors.append(f"Línea {i}: «{line}» — valor no numérico")
-            df_out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Hora (X)", col_y])
+            df_out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Hora (X)", "_lbl", col_y])
             return df_out, errors
 
-        edited_df, _parse_errors = _parse_raw(raw_text, y_col)
+        _df_full, _parse_errors = _parse_raw(raw_text, y_col, hhmm=_use_hhmm)
+        edited_df = _df_full.drop(columns=["_lbl"], errors="ignore")
 
         if _parse_errors:
             for _e in _parse_errors:
@@ -398,6 +439,9 @@ with tab_main:
         else:
             X = df_clean["Hora (X)"].values
             Y = df_clean[y_col].values
+            _hhmm_active = st.session_state.get(f"hhmm_{mode}", False)
+            x_labels_str = [_dec_to_label(v) for v in X.tolist()]
+            x_dt_str = [_dec_to_dt(v) for v in X.tolist()]
             try:
                 result = fit_model(model_name, X, Y, **hyperparams)
                 # Derivada si aplica
@@ -422,11 +466,16 @@ with tab_main:
                 if deriv_result is not None:
                     deriv_clean = {k: _tolist(v) for k, v in deriv_result.items()}
 
+                xs_dt_str = [_dec_to_dt(v) for v in result_clean["x_smooth"]]
+
                 st.session_state.results = {
                     "result": result_clean,
                     "deriv": deriv_clean,
                     "X": X.tolist(),
                     "Y": Y.tolist(),
+                    "X_labels": x_labels_str,
+                    "X_dt": x_dt_str,
+                    "xs_dt": xs_dt_str,
                     "model_name": model_name,
                     "mode": mode,
                     "hyperparams": hyperparams,
@@ -463,6 +512,9 @@ with tab_main:
             X = res["X"]
             Y = res["Y"]
             y_col_name = res["y_col"]
+            x_labels = res.get("X_labels", [_dec_to_label(v) for v in X])
+            X_dt = res.get("X_dt", [_dec_to_dt(v) for v in X])
+            xs_dt = res.get("xs_dt", [_dec_to_dt(v) for v in (result["x_smooth"] if isinstance(result["x_smooth"], list) else list(result["x_smooth"]))])
 
             # ── Tarjetas de métricas ──
             eq_col, r2_col, mse_col, rmse_col = st.columns([2, 1, 1, 1])
@@ -539,15 +591,13 @@ with tab_main:
 
             fig_main = go.Figure()
 
-            # Garantizar listas Python puras para Plotly 6.x
-            px = list(X) if not isinstance(X, list) else X
+            # Datos numéricos para ML ya están en res; para la gráfica usamos datetime
             py = list(Y) if not isinstance(Y, list) else Y
-            xs = result["x_smooth"] if isinstance(result["x_smooth"], list) else list(result["x_smooth"])
             ys = result["y_smooth"] if isinstance(result["y_smooth"], list) else list(result["y_smooth"])
 
-            # Puntos reales
+            # Puntos reales — eje X como datetime para espaciado real
             fig_main.add_trace(go.Scatter(
-                x=px, y=py,
+                x=X_dt, y=py,
                 mode="markers",
                 name="Mediciones",
                 marker=dict(
@@ -558,9 +608,9 @@ with tab_main:
                 ),
             ))
 
-            # Curva del modelo
+            # Curva del modelo — eje X como datetime
             fig_main.add_trace(go.Scatter(
-                x=xs, y=ys,
+                x=xs_dt, y=ys,
                 mode="lines",
                 name="Modelo",
                 line=dict(color="#4f46e5", width=3),
@@ -589,6 +639,8 @@ with tab_main:
                 font=dict(family="Inter, sans-serif", color="#334155"),
             )
             fig_main.update_xaxes(
+                type="date",
+                tickformat="%H:%M",
                 gridcolor="#e2e8f0", gridwidth=1,
                 linecolor="#cbd5e1", linewidth=1,
                 tickfont=dict(color="#475569", size=11),
@@ -608,10 +660,9 @@ with tab_main:
             if deriv is not None:
                 fig_deriv = go.Figure()
                 # Convertir a listas puras para Plotly 6.x
-                dxs = result["x_smooth"] if isinstance(result["x_smooth"], list) else list(result["x_smooth"])
                 dyd = deriv["y_derivative"] if isinstance(deriv["y_derivative"], list) else list(deriv["y_derivative"])
                 fig_deriv.add_trace(go.Scatter(
-                    x=dxs,
+                    x=xs_dt,
                     y=dyd,
                     mode="lines",
                     name="Velocidad v(x)",
@@ -644,6 +695,8 @@ with tab_main:
                     font=dict(family="Inter, sans-serif", color="#334155"),
                 )
                 fig_deriv.update_xaxes(
+                    type="date",
+                    tickformat="%H:%M",
                     gridcolor="#e2e8f0", gridwidth=1,
                     linecolor="#cbd5e1", linewidth=1,
                     tickfont=dict(color="#475569", size=11),

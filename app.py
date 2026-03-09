@@ -288,72 +288,81 @@ with tab_main:
         st.markdown('<p class="section-label">Datos de Medición</p>', unsafe_allow_html=True)
         y_col = "Longitud Sombra (cm)" if is_shadow else "Intensidad (Lux)"
 
-        # Clave de sesión para persistir la tabla por modo
-        _df_key = f"df_data_{mode}"
+        # Textos por defecto según modo
+        if is_shadow:
+            _default_text = (
+                "7.0,45.0\n8.0,30.0\n9.0,20.0\n10.0,12.0\n11.0,7.0\n"
+                "12.0,5.0\n13.0,7.0\n14.0,13.0\n15.0,22.0\n16.0,32.0\n17.0,48.0"
+            )
+        else:
+            _default_text = (
+                "7.0,120.0\n8.0,280.0\n9.0,480.0\n10.0,650.0\n11.0,820.0\n"
+                "12.0,900.0\n13.0,870.0\n14.0,700.0\n15.0,500.0\n16.0,300.0\n17.0,130.0"
+            )
 
-        # Datos por defecto según modo
-        if _df_key not in st.session_state:
-            if is_shadow:
-                st.session_state[_df_key] = pd.DataFrame({
-                    "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
-                    y_col: [45.0, 30.0, 20.0, 12.0, 7.0, 5.0, 7.0, 13.0, 22.0, 32.0, 48.0],
-                })
-            else:
-                st.session_state[_df_key] = pd.DataFrame({
-                    "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
-                    y_col: [120.0, 280.0, 480.0, 650.0, 820.0, 900.0, 870.0, 700.0, 500.0, 300.0, 130.0],
-                })
+        _txt_key = f"raw_text_{mode}"
+        if _txt_key not in st.session_state:
+            st.session_state[_txt_key] = _default_text
 
-        # Añadir columna de selección si no existe
-        _base_df = st.session_state[_df_key].copy()
-        if "✓" not in _base_df.columns:
-            _base_df.insert(0, "✓", False)
-
-        edited_df_raw = st.data_editor(
-            _base_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key=f"data_editor_{mode}",
-            column_config={
-                "✓": st.column_config.CheckboxColumn(
-                    "✓",
-                    help="Marca las filas que deseas eliminar",
-                    default=False,
-                    width="small",
-                ),
-                "Hora (X)": st.column_config.NumberColumn("Hora (X)", format="%.2f", min_value=0.0),
-                y_col: st.column_config.NumberColumn(y_col, format="%.2f", min_value=0.0),
-            },
-            hide_index=True,
+        st.markdown(
+            '<p style="font-size:12px;color:#64748b;margin-bottom:4px;">'
+            'Pega o escribe los datos: <code>hora,valor</code> — una fila por línea</p>',
+            unsafe_allow_html=True,
         )
+        raw_text = st.text_area(
+            "datos_raw",
+            value=st.session_state[_txt_key],
+            height=220,
+            label_visibility="collapsed",
+            placeholder="9.50,0\n9.55,8\n10.05,20.5\n...",
+            key=f"textarea_{mode}",
+        )
+        st.session_state[_txt_key] = raw_text
 
-        # -- Botones de acción bajo la tabla --
-        _col_del, _col_reset, _col_calc = st.columns([1, 1, 2])
+        # -- Parsear el texto a DataFrame --
+        def _parse_raw(text, col_y):
+            rows = []
+            errors = []
+            for i, line in enumerate(text.strip().splitlines(), 1):
+                line = line.strip()
+                if not line:
+                    continue
+                # Aceptar coma o punto y coma como separador
+                sep = ";" if ";" in line else ","
+                parts = line.split(sep)
+                if len(parts) < 2:
+                    errors.append(f"Línea {i}: «{line}» — necesita dos valores")
+                    continue
+                try:
+                    x_val = float(parts[0].strip())
+                    y_val = float(parts[1].strip())
+                    rows.append({"Hora (X)": x_val, col_y: y_val})
+                except ValueError:
+                    errors.append(f"Línea {i}: «{line}» — valor no numérico")
+            df_out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Hora (X)", col_y])
+            return df_out, errors
 
-        with _col_del:
-            _n_sel = int(edited_df_raw["✓"].sum()) if "✓" in edited_df_raw.columns else 0
-            if st.button(
-                f"🗑️ Eliminar ({_n_sel})",
-                disabled=(_n_sel == 0),
-                use_container_width=True,
-                help="Elimina las filas marcadas con ✓",
-            ):
-                _kept = edited_df_raw[~edited_df_raw["✓"]].drop(columns=["✓"]).reset_index(drop=True)
-                st.session_state[_df_key] = _kept
-                st.rerun()
+        edited_df, _parse_errors = _parse_raw(raw_text, y_col)
 
+        if _parse_errors:
+            for _e in _parse_errors:
+                st.warning(_e)
+
+        # Vista previa compacta
+        if not edited_df.empty:
+            st.markdown(
+                f'<p style="font-size:12px;color:#64748b;margin-top:6px;">'
+                f'✅ {len(edited_df)} punto(s) leído(s)</p>',
+                unsafe_allow_html=True,
+            )
+
+        # -- Botones --
+        _col_reset, _col_calc = st.columns([1, 2])
         with _col_reset:
-            if st.button("↺ Restaurar", use_container_width=True, help="Vuelve a los datos de ejemplo"):
-                del st.session_state[_df_key]
+            if st.button("↺ Restaurar ejemplo", use_container_width=True,
+                         help="Vuelve a los datos de ejemplo"):
+                st.session_state[_txt_key] = _default_text
                 st.rerun()
-
-        # Persistir cambios manuales en la tabla (sin la columna ✓)
-        _saved = edited_df_raw.drop(columns=["✓"], errors="ignore").reset_index(drop=True)
-        st.session_state[_df_key] = _saved
-
-        # DataFrame limpio para el cálculo (sin columna de selección)
-        edited_df = _saved
-
         with _col_calc:
             calculate = st.button("✨ Calcular Modelo", type="primary", use_container_width=True)
 

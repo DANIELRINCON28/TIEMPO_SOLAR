@@ -288,27 +288,74 @@ with tab_main:
         st.markdown('<p class="section-label">Datos de Medición</p>', unsafe_allow_html=True)
         y_col = "Longitud Sombra (cm)" if is_shadow else "Intensidad (Lux)"
 
-        # Datos por defecto según modo
-        if is_shadow:
-            default_data = pd.DataFrame({
-                "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
-                y_col: [45.0, 30.0, 20.0, 12.0, 7.0, 5.0, 7.0, 13.0, 22.0, 32.0, 48.0],
-            })
-        else:
-            default_data = pd.DataFrame({
-                "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
-                y_col: [120.0, 280.0, 480.0, 650.0, 820.0, 900.0, 870.0, 700.0, 500.0, 300.0, 130.0],
-            })
+        # Clave de sesión para persistir la tabla por modo
+        _df_key = f"df_data_{mode}"
 
-        edited_df = st.data_editor(
-            default_data,
+        # Datos por defecto según modo
+        if _df_key not in st.session_state:
+            if is_shadow:
+                st.session_state[_df_key] = pd.DataFrame({
+                    "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
+                    y_col: [45.0, 30.0, 20.0, 12.0, 7.0, 5.0, 7.0, 13.0, 22.0, 32.0, 48.0],
+                })
+            else:
+                st.session_state[_df_key] = pd.DataFrame({
+                    "Hora (X)": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
+                    y_col: [120.0, 280.0, 480.0, 650.0, 820.0, 900.0, 870.0, 700.0, 500.0, 300.0, 130.0],
+                })
+
+        # Añadir columna de selección si no existe
+        _base_df = st.session_state[_df_key].copy()
+        if "✓" not in _base_df.columns:
+            _base_df.insert(0, "✓", False)
+
+        edited_df_raw = st.data_editor(
+            _base_df,
             num_rows="dynamic",
             use_container_width=True,
             key=f"data_editor_{mode}",
+            column_config={
+                "✓": st.column_config.CheckboxColumn(
+                    "✓",
+                    help="Marca las filas que deseas eliminar",
+                    default=False,
+                    width="small",
+                ),
+                "Hora (X)": st.column_config.NumberColumn("Hora (X)", format="%.2f", min_value=0.0),
+                y_col: st.column_config.NumberColumn(y_col, format="%.2f", min_value=0.0),
+            },
+            hide_index=True,
         )
 
-        # -- Botón Calcular (justo bajo la tabla) --
-        calculate = st.button("✨ Calcular Modelo", type="primary", use_container_width=True)
+        # -- Botones de acción bajo la tabla --
+        _col_del, _col_reset, _col_calc = st.columns([1, 1, 2])
+
+        with _col_del:
+            _n_sel = int(edited_df_raw["✓"].sum()) if "✓" in edited_df_raw.columns else 0
+            if st.button(
+                f"🗑️ Eliminar ({_n_sel})",
+                disabled=(_n_sel == 0),
+                use_container_width=True,
+                help="Elimina las filas marcadas con ✓",
+            ):
+                _kept = edited_df_raw[~edited_df_raw["✓"]].drop(columns=["✓"]).reset_index(drop=True)
+                st.session_state[_df_key] = _kept
+                st.rerun()
+
+        with _col_reset:
+            if st.button("↺ Restaurar", use_container_width=True, help="Vuelve a los datos de ejemplo"):
+                del st.session_state[_df_key]
+                st.rerun()
+
+        # Persistir cambios manuales en la tabla (sin la columna ✓)
+        _saved = edited_df_raw.drop(columns=["✓"], errors="ignore").reset_index(drop=True)
+        st.session_state[_df_key] = _saved
+
+        # DataFrame limpio para el cálculo (sin columna de selección)
+        edited_df = _saved
+
+        with _col_calc:
+            calculate = st.button("✨ Calcular Modelo", type="primary", use_container_width=True)
 
         st.divider()
 

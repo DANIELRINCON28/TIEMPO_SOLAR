@@ -1,6 +1,6 @@
 """
 app.py — SolarMotion Tracker & Modeler
-Aplicación Streamlit unificada para modelar movimiento solar e intensidad lumínica.
+Aplicación Streamlit para modelar el movimiento solar mediante rastreo de sombras (gnomon).
 """
 
 import streamlit as st
@@ -114,11 +114,6 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
 
-    /* Modo Toggle */
-    div[data-testid="stRadio"] > label {
-        font-weight: 600 !important;
-    }
-
     /* Botón principal */
     .stButton > button[kind="primary"] {
         background: #4f46e5 !important;
@@ -143,17 +138,6 @@ st.markdown("""
     }
     .history-item:hover {
         border-color: #a5b4fc;
-    }
-    .history-badge-luz {
-        display: inline-block;
-        padding: 0.15rem 0.5rem;
-        background: #fef3c7;
-        color: #b45309;
-        font-size: 0.6rem;
-        font-weight: 700;
-        border-radius: 0.25rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
     }
     .history-badge-sombra {
         display: inline-block;
@@ -264,17 +248,9 @@ with tab_main:
     # PANEL IZQUIERDO: Controles
     # ─────────────────────────────────────────────────────────────────────────
     with col_left:
-        # -- Modo de Experimento --
-        st.markdown('<p class="section-label">Modo de Experimento</p>', unsafe_allow_html=True)
-        mode = st.radio(
-            "Selecciona el modo",
-            ["☀️ Modo Luz (Luxómetro)", "📏 Modo Sombra (Gnomon)"],
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        is_shadow = "Sombra" in mode
-
-        st.divider()
+        # -- Modo fijo: Sombra (Gnomon) --
+        mode = "📏 Modo Sombra (Gnomon)"
+        is_shadow = True
 
         # -- Selector de Modelo --
         st.markdown('<p class="section-label">Algoritmo de ML</p>', unsafe_allow_html=True)
@@ -313,30 +289,73 @@ with tab_main:
 
         # -- Tabla de Datos --
         st.markdown('<p class="section-label">Datos de Medición</p>', unsafe_allow_html=True)
-        y_col = "Longitud Sombra (cm)" if is_shadow else "Intensidad (Lux)"
+        y_col = "Longitud Sombra (cm)"
 
-        # Textos por defecto según modo
-        if is_shadow:
-            _default_text = (
-                "7.0,45.0\n8.0,30.0\n9.0,20.0\n10.0,12.0\n11.0,7.0\n"
-                "12.0,5.0\n13.0,7.0\n14.0,13.0\n15.0,22.0\n16.0,32.0\n17.0,48.0"
-            )
-        else:
-            _default_text = (
-                "7.0,120.0\n8.0,280.0\n9.0,480.0\n10.0,650.0\n11.0,820.0\n"
-                "12.0,900.0\n13.0,870.0\n14.0,700.0\n15.0,500.0\n16.0,300.0\n17.0,130.0"
-            )
+        _default_text = (
+            "7.0,45.0\n8.0,30.0\n9.0,20.0\n10.0,12.0\n11.0,7.0\n"
+            "12.0,5.0\n13.0,7.0\n14.0,13.0\n15.0,22.0\n16.0,32.0\n17.0,48.0"
+        )
 
-        _txt_key = f"raw_text_{mode}"
+        # -- Carga de archivo CSV --
+        st.markdown(
+            '<p style="font-size:12px;color:#64748b;margin-bottom:4px;">'
+            'Sube un archivo <code>.csv</code> con formato <code>Hora,Longitud</code> '
+            'o escribe los datos manualmente abajo.</p>',
+            unsafe_allow_html=True,
+        )
+        csv_file = st.file_uploader(
+            "Arrastra o selecciona tu archivo CSV",
+            type=["csv"],
+            label_visibility="collapsed",
+            key="csv_uploader",
+        )
+
+        # Si se sube un CSV, convertir su contenido al text area
+        if csv_file is not None:
+            try:
+                csv_df = pd.read_csv(csv_file)
+                # Normalizar nombres de columna (quitar espacios, minúsculas)
+                csv_df.columns = [c.strip().lower() for c in csv_df.columns]
+                # Intentar detectar las columnas
+                col_x = None
+                col_y = None
+                for c in csv_df.columns:
+                    if c in ("hora", "hour", "time", "x", "h"):
+                        col_x = c
+                    elif c in ("longitud", "longitud sombra", "sombra", "length", "y", "cm", "long"):
+                        col_y = c
+                # Si no se detectaron, usar las dos primeras columnas
+                if col_x is None and col_y is None and len(csv_df.columns) >= 2:
+                    col_x = csv_df.columns[0]
+                    col_y = csv_df.columns[1]
+                if col_x is not None and col_y is not None:
+                    lines = []
+                    for _, row in csv_df.iterrows():
+                        lines.append(f"{row[col_x]},{row[col_y]}")
+                    _csv_text = "\n".join(lines)
+                    # Solo hacer rerun si los datos cambiaron (evita loop infinito)
+                    if st.session_state.get("raw_text_sombra") != _csv_text:
+                        st.session_state["raw_text_sombra"] = _csv_text
+                        # También actualizar el key del widget para que Streamlit
+                        # use el nuevo valor en el próximo render
+                        st.session_state["textarea_sombra"] = _csv_text
+                        st.rerun()
+                    st.success(f"📄 CSV cargado: {len(csv_df)} filas desde «{csv_file.name}»")
+                else:
+                    st.error("No se pudieron detectar las columnas del CSV. Usa el formato: Hora,Longitud")
+            except Exception as e:
+                st.error(f"Error al leer el CSV: {e}")
+
+        _txt_key = "raw_text_sombra"
         if _txt_key not in st.session_state:
             st.session_state[_txt_key] = _default_text
 
-        _hhmm_key = f"hhmm_{mode}"
+        _hhmm_key = "hhmm_sombra"
         _use_hhmm = st.session_state.get(_hhmm_key, False)
 
         st.markdown(
             '<p style="font-size:12px;color:#64748b;margin-bottom:4px;">'
-            'Pega o escribe los datos: <code>hora,valor</code> — una fila por línea</p>',
+            'O pega/escribe los datos: <code>hora,longitud</code> — una fila por línea</p>',
             unsafe_allow_html=True,
         )
         raw_text = st.text_area(
@@ -344,15 +363,15 @@ with tab_main:
             value=st.session_state[_txt_key],
             height=220,
             label_visibility="collapsed",
-            placeholder="9.50,0\n9.55,8\n10.05,20.5\n...",
-            key=f"textarea_{mode}",
+            placeholder="1.25,44.2\n1.30,46.3\n1.35,48.5\n...",
+            key="textarea_sombra",
         )
         st.session_state[_txt_key] = raw_text
 
         _use_hhmm = st.checkbox(
             "⏱ Formato HH.MM — el decimal son minutos (ej: 10.05 = 10h 05min)",
             value=_use_hhmm,
-            key=f"cb_hhmm_{mode}",
+            key="cb_hhmm_sombra",
             help="Actívalo si tu hora usa punto como separador de minutos (0–59), no como fracción decimal.",
         )
         st.session_state[_hhmm_key] = _use_hhmm
@@ -402,7 +421,7 @@ with tab_main:
         with _col_reset:
             if st.button("↺ Restaurar ejemplo", use_container_width=True,
                          help="Vuelve a los datos de ejemplo"):
-                st.session_state[_txt_key] = _default_text
+                st.session_state["raw_text_sombra"] = _default_text
                 st.rerun()
         with _col_calc:
             calculate = st.button("✨ Calcular Modelo", type="primary", use_container_width=True)
@@ -439,7 +458,7 @@ with tab_main:
         else:
             X = df_clean["Hora (X)"].values
             Y = df_clean[y_col].values
-            _hhmm_active = st.session_state.get(f"hhmm_{mode}", False)
+            _hhmm_active = st.session_state.get("hhmm_sombra", False)
             x_labels_str = [_dec_to_label(v) for v in X.tolist()]
             x_dt_str = [_dec_to_dt(v) for v in X.tolist()]
             try:
@@ -484,7 +503,7 @@ with tab_main:
                 }
 
                 # Guardar en historial
-                mode_short = "Sombra" if is_shadow else "Luz"
+                mode_short = "Sombra"
                 save_run(
                     mode=mode_short,
                     model_name=model_name,
@@ -585,8 +604,8 @@ with tab_main:
                 st.latex(latex_eq)
 
             # ── Gráfica Principal ──
-            is_shadow_mode = "Sombra" in res["mode"]
-            chart_title = "Rastreo de Sombras (Gnomon)" if is_shadow_mode else "Ajuste de Intensidad Solar"
+            is_shadow_mode = True
+            chart_title = "Rastreo de Sombras (Gnomon)"
             chart_subtitle = f"{res['model_name']}"
 
             fig_main = go.Figure()
@@ -747,7 +766,7 @@ with tab_main:
             if fig_deriv is not None:
                 deriv_bytes = fig_deriv.to_image(format="png", width=1200, height=400, scale=2)
 
-            mode_label = "Rastreo de Sombras" if is_shadow_mode else "Intensidad Lumínica"
+            mode_label = "Rastreo de Sombras"
             pdf_bytes = generate_pdf(
                 mode=mode_label,
                 model_name=res["model_name"],
@@ -834,7 +853,7 @@ with tab_history:
         st.markdown("---")
         st.markdown("#### Detalle de Ejecuciones")
         for run in history[:20]:
-            badge_class = "history-badge-sombra" if run["mode"] == "Sombra" else "history-badge-luz"
+            badge_class = "history-badge-sombra"
             r2_color = "#10b981" if (run.get("r2") or 0) > 0.9 else ("#f59e0b" if (run.get("r2") or 0) > 0.7 else "#f43f5e")
             st.markdown(f"""
             <div class="history-item">
